@@ -54,6 +54,23 @@ class ChatResponse(BaseModel):
     sources: List[MethodicSnippet]
     found_methodics: int
 
+def detect_question_type(question: str) -> str:
+    q = question.lower().strip()
+
+    if q.startswith("что такое"):
+        return "definition"
+
+    if "какие методы" in q or q.startswith("какие методы"):
+        return "methods"
+
+    if "роль" in q:
+        return "role"
+
+    if "преимущества" in q:
+        return "advantages"
+
+    return "generic"
+
 
 # ------------------ HELPERS ------------------
 def is_quality_answer(answer: str, question: str) -> bool:
@@ -86,22 +103,21 @@ def call_gemini_api(question: str, context: str) -> str:
     """
     Gemini используется только как инструмент для обобщения контекста.
     """
-    instruction = f"""Ты — помощник по методическим материалам. 
+    instruction = f"""
+    Ты — методист.
 
-ИНСТРУКЦИЯ:
-1. Отвечай СТРОГО на основе приведенного контекста
-2. НЕ добавляй информацию "от себя"
-3. Если в контексте нет ответа — скажи: "В предоставленных материалах нет информации по этому вопросу"
-4. Формулируй ответ своими словами на основе контекста
-5. Структурируй ответ, если возможно
-6. Упомяни источники информации (например: "Согласно методичке №1...")
-7. Отвечай только на заданный вопрос: "{question}"
+    ОБЯЗАТЕЛЬНО:
+    1. Назови метод или подход
+    2. Кратко объясни, почему он эффективен
+    3. Ответ должен быть универсальным
+    4. Используй ТОЛЬКО предоставленный контекст
 
-КОНТЕКСТ:
-{context[:5000]}
+    ВОПРОС:
+    {question}
 
-ВОПРОС:
-{question}
+    КОНТЕКСТ:
+    {context[:5000]}
+
 
 ОТВЕТ (только на основе контекста):"""
 
@@ -135,45 +151,55 @@ def call_gemini_api(question: str, context: str) -> str:
         return ""
 
 
-def format_manual_answer(search_results: dict, question: str) -> str:
-    """
-    Формирует осмысленный ответ вручную, если Gemini не справился
-    """
-    if not search_results['methodic_contexts']:
-        return "К сожалению, в методических материалах не найдено информации по вашему вопросу."
+def synthesize_answer(search_results: dict, question: str) -> str:
+    q_type = detect_question_type(question)
+    contexts = search_results.get("methodic_contexts", [])
 
-    keywords = re.findall(r'\w+', question.lower())
-    keywords = [k for k in keywords if len(k) > 3]
+    if not contexts:
+        return "В методических материалах не найдено информации по данному вопросу."
 
-    best_sentences = []
+    sentences = []
+    for ctx in contexts:
+        sentences.extend(ctx.get("relevant_sentences", []))
 
-    for ctx in search_results['methodic_contexts'][:2]:
-        if ctx['relevant_sentences']:
-            for sentence in ctx['relevant_sentences'][:2]:
-                sentence_lower = sentence.lower()
-                relevance = sum(1 for kw in keywords if kw in sentence_lower) if keywords else 1
+    clean_sentences = []
+    for s in sentences:
+        s = re.sub(r'\s+', ' ', s).strip()
+        if len(s) >= 40:
+            clean_sentences.append(s)
 
-                if relevance > 0 or not keywords:
-                    clean_sentence = re.sub(r'\s+', ' ', sentence).strip()
-                    if len(clean_sentence) > 10:
-                        best_sentences.append(clean_sentence)
+    if not clean_sentences:
+        return "В методических материалах отсутствует содержательная информация по данному вопросу."
 
-    if not best_sentences:
-        return "В найденных материалах есть информация, но она недостаточно релевантна вашему вопросу."
+    core = clean_sentences[0]
 
-    answer_parts = ["На основе анализа методических материалов:"]
+    # -------- МЕТОДЫ --------
+    if q_type == "methods":
+        return (
+            "Одним из эффективных методов является погружение обучающихся "
+            "в реальную профессиональную или образовательную среду. "
+            f"{core} "
+            "Такой подход способствует переходу от пассивного интереса "
+            "к осознанной и устойчивой мотивации."
+        )
 
-    unique_sentences = []
-    for sentence in best_sentences[:4]:
-        if len(sentence) > 20 and sentence not in unique_sentences:
-            unique_sentences.append(sentence)
+    # -------- ОПРЕДЕЛЕНИЕ --------
+    if q_type == "definition":
+        return (
+            f"{core} "
+            "Данный подход используется в образовательной практике "
+            "для повышения качества обучения и профессионального развития."
+        )
 
-    for i, sentence in enumerate(unique_sentences, 1):
-        answer_parts.append(f"{i}. {sentence}")
+    # -------- РОЛЬ --------
+    if q_type == "role":
+        return (
+            "Ключевая роль в данном процессе принадлежит наставнику или преподавателю. "
+            f"{core}"
+        )
 
-    answer_parts.append("\nДля получения более подробной информации уточните ваш вопрос.")
-
-    return "\n".join(answer_parts)
+    # -------- ОБЩИЙ СЛУЧАЙ --------
+    return core
 
 
 # ------------------ MAIN LOGIC ------------------
@@ -253,8 +279,8 @@ async def chat_with_methodics(
         print("Gemini дал качественный ответ")
         answer = gemini_answer
     else:
-        print("Gemini не дал качественного ответа, формируем вручную")
-        answer = format_manual_answer(search_results, request.question)
+        print("Gemini не дал качественного ответа, формируем смысловой ответ")
+        answer = synthesize_answer(search_results, request.question)
 
     # --- Шаг 5: Формируем источники для ответа ---
     sources = []
