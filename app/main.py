@@ -7,7 +7,7 @@ import requests
 import re
 
 from app import auth
-from database import get_db, init_db
+from app.database import get_db, init_db
 from models import MethodicEntry, QAEntry
 from search import (
     search_methodics_with_context,
@@ -17,9 +17,13 @@ from search import (
 )
 from config import settings
 from pydantic import BaseModel
+from admin import router as admin_router
+
+
 
 app = FastAPI(title="Methodics Chat Bot (Dual Database)", version="3.1.0")
 auth.init_auth(app)
+app.include_router(admin_router)
 
 # ------------------ CORS ------------------
 app.add_middleware(

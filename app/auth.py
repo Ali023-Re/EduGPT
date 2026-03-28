@@ -6,7 +6,7 @@ import bcrypt
 import json
 import time
 
-from database import get_db
+from app.database import get_db
 from models import User
 
 # Redis для сессий
@@ -45,6 +45,20 @@ def save_session(token, session_data):
 
 def delete_session(token):
     r.delete(token)
+
+
+def get_current_user(request: Request):
+    token = request.cookies.get("session_token")
+
+    if not token:
+        raise HTTPException(status_code=401)
+
+    session = get_session(token)
+
+    if not session or not session.get("authenticated"):
+        raise HTTPException(status_code=403)
+
+    return session["user_id"]
 
 
 def init_auth(app):
